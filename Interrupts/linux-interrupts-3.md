@@ -4,7 +4,7 @@ Interrupts and Interrupt Handling. Part 3.
 Exception Handling
 --------------------------------------------------------------------------------
 
-This is the third part of the [chapter](https://0xax.gitbook.io/linux-insides/summary/interrupts) about an interrupts and an exceptions handling in the Linux kernel and in the previous [part](https://0xax.gitbook.io/linux-insides/summary/interrupts) we stopped at the `setup_arch` function from the [arch/x86/kernel/setup.c](https://github.com/torvalds/linux/blame/master/arch/x86/kernel/setup.c) source code file.
+This is the third part of the [chapter](https://0xax.gitbook.io/linux-insides/summary/interrupts) about an interrupts and an exceptions handling in the Linux kernel and in the previous [part](https://0xax.gitbook.io/linux-insides/summary/interrupts) we stopped at the `setup_arch` function from the [arch/x86/kernel/setup.c](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/kernel/setup.c) source code file.
 
 We already know that this function executes initialization of architecture-specific stuff. In our case the `setup_arch` function does [x86_64](https://en.wikipedia.org/wiki/X86-64) architecture related initializations. The `setup_arch` is big function, and in the previous part we stopped on the setting of the two exceptions handlers for the two following exceptions:
 
@@ -13,27 +13,27 @@ We already know that this function executes initialization of architecture-speci
 
 These exceptions allow the `x86_64` architecture to have early exception processing for the purpose of debugging via the [kgdb](https://en.wikipedia.org/wiki/KGDB).
 
-As you can remember we set these exceptions handlers in the `early_trap_init` function:
+As you can remember we set these exceptions handlers in the `idt_setup_early_traps` function:
 
 ```C
-void __init early_trap_init(void)
+void __init idt_setup_early_traps(void)
 {
-        set_intr_gate_ist(X86_TRAP_DB, &debug, DEBUG_STACK);
-        set_system_intr_gate_ist(X86_TRAP_BP, &int3, DEBUG_STACK);
-        load_idt(&idt_descr);
+	idt_setup_from_table(idt_table, early_idts, ARRAY_SIZE(early_idts),
+			     true);
+	load_idt(&idt_descr);
 }
 ```
 
-from the [arch/x86/kernel/traps.c](https://github.com/torvalds/linux/tree/master/arch/x86/kernel/traps.c). We already saw implementation of the `set_intr_gate_ist` and `set_system_intr_gate_ist` functions in the previous part and now we will look on the implementation of these two exceptions handlers.
+from the [arch/x86/kernel/idt.c](https://github.com/torvalds/linux/tree/master/arch/x86/kernel/idt.c). Now we will look on the implementation of these two exceptions handlers.
 
 Debug and Breakpoint exceptions
 --------------------------------------------------------------------------------
 
-Ok, we setup exception handlers in the `early_trap_init` function for the `#DB` and `#BP` exceptions and now time is to consider their implementations. But before we will do this, first of all let's look on details of these exceptions.
+Ok, we setup exception handlers in the `idt_setup_early_traps` function for the `#DB` and `#BP` exceptions and now time is to consider their implementations. But before we will do this, first of all let's look on details of these exceptions.
 
 The first exceptions - `#DB` or `debug` exception occurs when a debug event occurs. For example - attempt to change the contents of a [debug register](http://en.wikipedia.org/wiki/X86_debug_register). Debug registers are special registers that were presented in `x86` processors starting from the [Intel 80386](http://en.wikipedia.org/wiki/Intel_80386) processor and as you can understand from name of this CPU extension, main purpose of these registers is debugging.
 
-These registers allow to set breakpoints on the code and read or write data to trace it. Debug registers may be accessed only in the privileged mode and an attempt to read or write the debug registers when executing at any other privilege level causes a [general protection fault](https://en.wikipedia.org/wiki/General_protection_fault) exception. That's why we have used `set_intr_gate_ist` for the `#DB` exception, but not the `set_system_intr_gate_ist`.
+These registers allow to set breakpoints on the code and read or write data to trace it. Debug registers may be accessed only in the privileged mode and an attempt to read or write the debug registers when executing at any other privilege level causes a [general protection fault](https://en.wikipedia.org/wiki/General_protection_fault) exception. That's why we specify the ` DPL` field of  `#DB`'s  IDT descriptor as `0`. 
 
 The verctor number of the `#DB` exceptions is `1` (we pass it as `X86_TRAP_DB`) and as we may read in specification, this exception has no error code:
 
@@ -107,12 +107,12 @@ From this moment we know a little about these two exceptions and we can move on 
 Preparation before an exception handler
 --------------------------------------------------------------------------------
 
-As you may note before, the `set_intr_gate_ist` and `set_system_intr_gate_ist` functions takes an addresses of exceptions handlers in theirs second parameter. In or case our two exception handlers will be:
+The exception handler is specified in the second parameter of the `INTG` or `SYSG` macro. In our case two exception handlers will be:
 
 * `debug`;
 * `int3`.
 
-You will not find these functions in the C code. all of that could be found in the kernel's `*.c/*.h` files only definition of these functions which are located in the [arch/x86/include/asm/traps.h](https://github.com/torvalds/linux/tree/master/arch/x86/include/asm/traps.h) kernel header file:
+You will not find these functions in the C code. all of that could be found in the kernel's `*.c/*.h` files only definition of these functions which are located in the [arch/x86/include/asm/traps.h](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/include/asm/traps.h) kernel header file:
 
 ```C
 asmlinkage void debug(void);
@@ -126,40 +126,45 @@ asmlinkage void int3(void);
 
 You may note `asmlinkage` directive in definitions of these functions. The directive is the special specificator of the [gcc](http://en.wikipedia.org/wiki/GNU_Compiler_Collection). Actually for a `C` functions which are called from assembly, we need in explicit declaration of the function calling convention. In our case, if function made with `asmlinkage` descriptor, then `gcc` will compile the function to retrieve parameters from stack.
 
-So, both handlers are defined in the [arch/x86/entry/entry_64.S](https://github.com/torvalds/linux/blob/16f73eb02d7e1765ccab3d2018e0bd98eb93d973/arch/x86/entry/entry_64.S) assembly source code file with the `idtentry` macro:
+So, both handlers are defined in the [arch/x86/entry/entry_64.S](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/entry/entry_64.S) assembly source code file with the `idtentry` macro:
 
 ```assembly
-idtentry debug do_debug has_error_code=0 paranoid=1 shift_ist=DEBUG_STACK
+idtentry debug			do_debug		has_error_code=0	paranoid=1 shift_ist=IST_INDEX_DB ist_offset=DB_STACK_OFFSET
 ```
 
 and
 
 ```assembly
-idtentry int3 do_int3 has_error_code=0 paranoid=1 shift_ist=DEBUG_STACK
+idtentry int3			do_int3			has_error_code=0	create_gap=1
 ```
 
 Each exception handler may be consists from two parts. The first part is generic part and it is the same for all exception handlers. An exception handler should to save  [general purpose registers](https://en.wikipedia.org/wiki/Processor_register) on the stack, switch to kernel stack if an exception came from userspace and transfer control to the second part of an exception handler. The second part of an exception handler does certain work depends on certain exception. For example page fault exception handler should find virtual page for given address, invalid opcode exception handler should send `SIGILL` [signal](https://en.wikipedia.org/wiki/Unix_signal) and etc.
 
-As we just saw, an exception handler starts from definition of the `idtentry` macro from the [arch/x86/entry/entry_64.S](https://github.com/torvalds/linux/blob/master/arch/x86/entry/entry_64.S) assembly source code file, so let's look at implementation of this macro. As we may see, the `idtentry` macro takes five arguments:
+As we just saw, an exception handler starts from definition of the `idtentry` macro from the [arch/x86/entry/entry_64.S](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/entry/entry_64.S) assembly source code file, so let's look at implementation of this macro. As we may see, the `idtentry` macro takes multiple arguments:
 
-* `sym` - defines global symbol with the `.globl name` which will be an an entry of exception handler;
-* `do_sym` - symbol name which represents a secondary entry of an exception handler;
+* `sym` - defines global symbol which will be an entry of exception handler;
+* `do_sym` - symbol name which represents a secondary entry of an exception handler and It represents a C function;
 * `has_error_code` - information about existence of an error code of exception.
 
-The last two parameters are optional:
+The other parameters are optional:
 
-* `paranoid` - shows us how we need to check current mode (will see explanation in details later);
+* `paranoid` - non-zero means that this vector may be invoked from kernel mode with user GSBASE and/or user CR3
+  * Only `debug` & `machine check` exceptions have `1`
+  * `2` is special: stack is never switched. This is for `double fault` exception
 * `shift_ist` - shows us is an exception running at `Interrupt Stack Table`.
+* `ist_offset` - **TODO**
+* `create_gap` - create a 6-word stack gap when coming from kernel mode. It is used to allow the `int3` handler to emulate a call instruction.
 
 Definition of the `.idtentry` macro looks:
 
 ```assembly
-.macro idtentry sym do_sym has_error_code:req paranoid=0 shift_ist=-1
-ENTRY(\sym)
+.macro idtentry sym do_sym has_error_code:req paranoid=0 shift_ist=-1 ist_offset=0 create_gap=0 read_cr2=0
+SYM_CODE_START(\sym)
 ...
 ...
 ...
-END(\sym)
+_ASM_NOKPROBE(\sym)
+SYM_CODE_END(\sym)
 .endm
 ```
 
@@ -179,8 +184,8 @@ Before we will consider internals of the `idtentry` macro, we should to know sta
 Now we may start to consider implementation of the `idtmacro`. Both `#DB` and `BP` exception handlers are defined as:
 
 ```assembly
-idtentry debug do_debug has_error_code=0 paranoid=1 shift_ist=DEBUG_STACK
-idtentry int3 do_int3 has_error_code=0 paranoid=1 shift_ist=DEBUG_STACK
+idtentry debug			do_debug		has_error_code=0	paranoid=1 shift_ist=IST_INDEX_DB ist_offset=DB_STACK_OFFSET
+idtentry int3			do_int3			has_error_code=0	create_gap=1
 ```
 
 If we will look at these definitions, we may know that compiler will generate two routines with `debug` and `int3` names and both of these exception handlers will call `do_debug` and `do_int3` secondary handlers after some preparation. The third parameter defines existence of error code and as we may see both our exception do not have them. As we may see on the diagram above, processor pushes error code on stack if an exception provides it. In our case, the `debug` and `int3` exception do not have error codes. This may bring some difficulties because stack will look differently for exceptions which provides error code and for exceptions which not. That's why implementation of the `idtentry` macro starts from putting a fake error code to the stack if an exception does not provide it:
@@ -193,17 +198,16 @@ If we will look at these definitions, we may know that compiler will generate tw
 
 But it is not only fake error-code. Moreover the `-1` also represents invalid system call number, so that the system call restart logic will not be triggered.
 
-The last two parameters of the `idtentry` macro `shift_ist` and `paranoid` allow to know do an exception handler runned at stack from `Interrupt Stack Table` or not. You already may know that each kernel thread in the system has own stack. In addition to these stacks, there are some specialized stacks associated with each processor in the system. One of these stacks is - exception stack. The [x86_64](https://en.wikipedia.org/wiki/X86-64) architecture provides special feature which is called - `Interrupt Stack Table`. This feature allows to switch to a new stack for designated events such as an atomic exceptions like `double fault` and etc. So the `shift_ist` parameter allows us to know do we need to switch on `IST` stack for an exception handler or not.
+Another two parameters of the `idtentry` macro `shift_ist` and `paranoid` allow to know do an exception handler runned at stack from `Interrupt Stack Table` or not. You already may know that each kernel thread in the system has own stack. In addition to these stacks, there are some specialized stacks associated with each processor in the system. One of these stacks is - exception stack. The [x86_64](https://en.wikipedia.org/wiki/X86-64) architecture provides special feature which is called - `Interrupt Stack Table`. This feature allows to switch to a new stack for designated events such as an atomic exceptions like `double fault` and etc. So the `shift_ist` parameter allows us to know do we need to switch on `IST` stack for an exception handler or not.
 
-The second parameter - `paranoid` defines the method which helps us to know did we come from userspace or not to an exception handler. The easiest way to determine this is to via `CPL` or `Current Privilege Level` in `CS` segment register. If it is equal to `3`, we came from userspace, if zero we came from kernel space:
+The second parameter - `paranoid`  indicates whether this exception can be invoked from kernel mode with user `GSBASE` and/or user `CR3`. The easiest way to determine this is to via `CPL` or `Current Privilege Level` in `CS` segment register. If it is equal to `3`, we came from userspace, if zero we came from kernel space:
 
-```
-testl $3,CS(%rsp)
-jnz userspace
+```assembly
+testb	$3, CS-ORIG_RAX(%rsp)		/* If coming from userspace, switch stacks */
+jnz	.Lfrom_usermode_switch_stack_\@
 ...
 ...
 ...
-// we are from the kernel space
 ```
 
 But unfortunately this method does not give a 100% guarantee. As described in the kernel documentation:
@@ -224,97 +228,106 @@ js 1f
 
 In first two lines of code we read value of the `MSR_GS_BASE` model specific register into `edx:eax` pair. We can't set negative value to the `gs` from userspace. But from other side we know that direct mapping of the physical memory starts from the `0xffff880000000000` virtual address. In this way, `MSR_GS_BASE` will contain an address from `0xffff880000000000` to `0xffffc7ffffffffff`. After the `rdmsr` instruction will be executed, the smallest possible value in the `%edx` register will be - `0xffff8800` which is `-30720` in unsigned 4 bytes. That's why kernel space `gs` which points to start of `per-cpu` area will contain negative value.
 
-After we pushed fake error code on the stack, we should allocate space for general purpose registers with:
+Finally, the `idtentry` macro would invoke the `idtentry` macro. There are different cases based on `paranoid` and whether an exception comes from userspace or not: 
 
 ```assembly
-ALLOC_PT_GPREGS_ON_STACK
-```
-
-macro which is defined in the [arch/x86/entry/calling.h](https://github.com/torvalds/linux/blob/16f73eb02d7e1765ccab3d2018e0bd98eb93d973/arch/x86/entry/calling.h) header file. This macro just allocates 15*8 bytes space on the stack to preserve general purpose registers:
-
-```assembly
-.macro ALLOC_PT_GPREGS_ON_STACK addskip=0
-    addq	$-(15*8+\addskip), %rsp
-.endm
-```
-
-So the stack will look like this after execution of the `ALLOC_PT_GPREGS_ON_STACK`:
-
-```
-     +------------+
-+160 | %SS        |
-+152 | %RSP       |
-+144 | %RFLAGS    |
-+136 | %CS        |
-+128 | %RIP       |
-+120 | ERROR CODE |
-     |------------|
-+112 |            |
-+104 |            |
- +96 |            |
- +88 |            |
- +80 |            |
- +72 |            |
- +64 |            |
- +56 |            |
- +48 |            |
- +40 |            |
- +32 |            |
- +24 |            |
- +16 |            |
-  +8 |            |
-  +0 |            | <- %RSP
-     +------------+
-```
-
-After we allocated space for general purpose registers, we do some checks to understand did an exception come from userspace or not and if yes, we should move back to an interrupted process stack or stay on exception stack:
-
-```assembly
-.if \paranoid
     .if \paranoid == 1
-	    testb	$3, CS(%rsp)
-	    jnz	1f
+    testb	$3, CS-ORIG_RAX(%rsp)		/* If coming from userspace, switch stacks */
+    jnz	.Lfrom_usermode_switch_stack_\@
+    .endif
+    ...
+    idtentry_part \do_sym, \has_error_code, \read_cr2, \paranoid, \shift_ist, \ist_offset
+	.if \paranoid == 1
+	/*
+	 * Entry from userspace.  Switch stacks and treat it
+	 * as a normal entry.  This means that paranoid handlers
+	 * run in real process context if user_mode(regs).
+	 */
+.Lfrom_usermode_switch_stack_\@:
+	idtentry_part \do_sym, \has_error_code, \read_cr2, paranoid=0
 	.endif
-	call	paranoid_entry
-.else
-	call	error_entry
-.endif
 ```
 
-Let's consider all of these there cases in course.
+Let's look at the implementation of `idtentry_part` now.
 
-An exception occured in userspace
---------------------------------------------------------------------------------
+idtentry_part
+----------------------------------------------------------------------------------------
+The first thing to do in `idtentry_part` is to save all registers in `pt_regs` and switch `gs` if needed. However, based on different ways used to determine whether an exception comes from userspace, two different functions are called.
 
-In the first let's consider a case when an exception has `paranoid=1` like our `debug` and `int3` exceptions. In this case we check selector from `CS` segment register and jump at `1f` label if we came from userspace or the `paranoid_entry` will be called in other way.
+```assembly
+	.if \paranoid
+	// come from kernel mode & paranoid==1
+	call	paranoid_entry
+	/* returned flag: ebx=0: need swapgs on exit, ebx=1: don't need it */
+	.else
+	call	error_entry
+	.endif
+```
 
-Let's consider first case when we came from userspace to an exception handler. As described above we should jump at `1` label. The `1` label starts from the call of the
+Let's consider first case when we came from userspace or has `paranoid` equals to 1. As described above we would execute:
 
 ```assembly
 call	error_entry
 ```
 
-routine which saves all general purpose registers in the previously allocated area on the stack:
+routine which saves and clears all general purpose registers on the stack:
 
 ```assembly
-SAVE_C_REGS 8
-SAVE_EXTRA_REGS 8
+	PUSH_AND_CLEAR_REGS save_ret=1
 ```
 
-These both macros are defined in the  [arch/x86/entry/calling.h](https://github.com/torvalds/linux/blob/16f73eb02d7e1765ccab3d2018e0bd98eb93d973/arch/x86/entry/calling.h) header file and just move values of general purpose registers to a certain place at the stack, for example:
+`PUSH_AND_CLEAR_REGS` macro is defined in the  [arch/x86/entry/calling.h](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/entry/calling.h) header file and just move values of general purpose registers to a certain place at the stack, for example:
 
 ```assembly
-.macro SAVE_EXTRA_REGS offset=0
-	movq %r15, 0*8+\offset(%rsp)
-	movq %r14, 1*8+\offset(%rsp)
-	movq %r13, 2*8+\offset(%rsp)
-	movq %r12, 3*8+\offset(%rsp)
-	movq %rbp, 4*8+\offset(%rsp)
-	movq %rbx, 5*8+\offset(%rsp)
+.macro PUSH_AND_CLEAR_REGS rdx=%rdx rax=%rax save_ret=0
+	/*
+	 * Push registers and sanitize registers of values that a
+	 * speculation attack might otherwise want to exploit. The
+	 * lower registers are likely clobbered well before they
+	 * could be put to use in a speculative execution gadget.
+	 * Interleave XOR with PUSH for better uop scheduling:
+	 */
+	.if \save_ret
+	pushq	%rsi		/* pt_regs->si */
+	movq	8(%rsp), %rsi	/* temporarily store the return address in %rsi */
+	movq	%rdi, 8(%rsp)	/* pt_regs->di (overwriting original return address) */
+	.else
+	pushq   %rdi		/* pt_regs->di */
+	pushq   %rsi		/* pt_regs->si */
+	.endif
+	pushq	\rdx		/* pt_regs->dx */
+	xorl	%edx, %edx	/* nospec   dx */
+	pushq   %rcx		/* pt_regs->cx */
+	xorl	%ecx, %ecx	/* nospec   cx */
+	pushq   \rax		/* pt_regs->ax */
+	pushq   %r8		/* pt_regs->r8 */
+	xorl	%r8d, %r8d	/* nospec   r8 */
+	pushq   %r9		/* pt_regs->r9 */
+	xorl	%r9d, %r9d	/* nospec   r9 */
+	pushq   %r10		/* pt_regs->r10 */
+	xorl	%r10d, %r10d	/* nospec   r10 */
+	pushq   %r11		/* pt_regs->r11 */
+	xorl	%r11d, %r11d	/* nospec   r11*/
+	pushq	%rbx		/* pt_regs->rbx */
+	xorl    %ebx, %ebx	/* nospec   rbx*/
+	pushq	%rbp		/* pt_regs->rbp */
+	xorl    %ebp, %ebp	/* nospec   rbp*/
+	pushq	%r12		/* pt_regs->r12 */
+	xorl	%r12d, %r12d	/* nospec   r12*/
+	pushq	%r13		/* pt_regs->r13 */
+	xorl	%r13d, %r13d	/* nospec   r13*/
+	pushq	%r14		/* pt_regs->r14 */
+	xorl	%r14d, %r14d	/* nospec   r14*/
+	pushq	%r15		/* pt_regs->r15 */
+	xorl	%r15d, %r15d	/* nospec   r15*/
+	UNWIND_HINT_REGS
+	.if \save_ret
+	pushq	%rsi		/* return address on top of stack */
+	.endif
 .endm
 ```
 
-After execution of `SAVE_C_REGS` and `SAVE_EXTRA_REGS` the stack will look:
+After execution of `PUSH_AND_CLEAR_REGS` the stack will look:
 
 ```
      +------------+
@@ -350,9 +363,7 @@ testb	$3, CS+8(%rsp)
 jz	.Lerror_kernelspace
 ```
 
-because we may have potentially fault if as described in documentation truncated `%RIP` was reported. Anyway, in both cases the [SWAPGS](http://www.felixcloutier.com/x86/SWAPGS.html) instruction will be executed and values from `MSR_KERNEL_GS_BASE` and `MSR_GS_BASE` will be swapped. From this moment the `%gs` register will point to the base address of kernel structures. So, the `SWAPGS` instruction is called and it was main point of the `error_entry` routing.
-
-Now we can back to the `idtentry` macro. We may see following assembler code after the call of `error_entry`:
+If the exception comes from userspace, `swapgs` is invoked to user `kernel_gs_base`. Then we would switch stack to kernel thread stack and copy the saved `pt_regs` to the kernel thread stack. 
 
 ```assembly
 movq	%rsp, %rdi
@@ -364,16 +375,11 @@ Here we put base address of stack pointer `%rdi` register which will be first ar
 ```C
 asmlinkage __visible notrace struct pt_regs *sync_regs(struct pt_regs *eregs)
 {
-	struct pt_regs *regs = task_pt_regs(current);
-	*regs = *eregs;
+	struct pt_regs *regs = (struct pt_regs *)this_cpu_read(cpu_current_top_of_stack) - 1;
+	if (regs != eregs)
+		*regs = *eregs;
 	return regs;
 }
-```
-
-This function takes the result of the `task_ptr_regs` macro which is defined in the [arch/x86/include/asm/processor.h](https://github.com/torvalds/linux/blob/16f73eb02d7e1765ccab3d2018e0bd98eb93d973/arch/x86/include/asm/processor.h) header file, stores it in the stack pointer and return it. The `task_ptr_regs` macro expands to the address of `thread.sp0` which represents pointer to the normal kernel stack:
-
-```C
-#define task_pt_regs(tsk)       ((struct pt_regs *)(tsk)->thread.sp0 - 1)
 ```
 
 As we came from userspace, this means that exception handler will run in real process context. After we got stack pointer from the `sync_regs` we switch stack:
@@ -394,7 +400,7 @@ as it will be passed as first parameter of secondary exception handler.
 
 2. Pass error code to the `%rsi` register as it will be second argument of an exception handler and set it to `-1` on the stack for the same purpose as we did it before - to prevent restart of a system call:
 
-```
+```assembly
 .if \has_error_code
 	movq	ORIG_RAX(%rsp), %rsi
 	movq	$-1, ORIG_RAX(%rsp)
@@ -425,70 +431,65 @@ dotraplinkage void notrace do_int3(struct pt_regs *regs, long error_code);
 
 will be for `int 3` exception. In this part we will not see implementations of secondary handlers, because of they are very specific, but will see some of them in one of next parts.
 
-We just considered first case when an exception occurred in userspace. Let's consider last two.
-
-An exception with paranoid > 0 occurred in kernelspace
---------------------------------------------------------------------------------
-
-In this case an exception was occurred in kernelspace and `idtentry` macro is defined with `paranoid=1` for this exception. This value of `paranoid` means that we should use slower way that we saw in the beginning of this part to check do we really came from kernelspace or not. The `paranoid_entry` routing allows us to know this:
+Next, let us consider about the implementation of `paranoid_entry` function. In this case (i.e., when `paranoid_entry` is invoked inside `idtentry_part`) an exception was occurred in kernelspace and `idtentry` macro is defined with `paranoid=1` for this exception. This value of `paranoid` means that we should use *slower way* that we saw in the beginning of this part to check whether we really came from kernelspace or not. The `paranoid_entry` routing allows us to know this:
 
 ```assembly
-ENTRY(paranoid_entry)
+SYM_CODE_START_LOCAL(paranoid_entry)
+	UNWIND_HINT_FUNC
 	cld
-	SAVE_C_REGS 8
-	SAVE_EXTRA_REGS 8
+	PUSH_AND_CLEAR_REGS save_ret=1
+	ENCODE_FRAME_POINTER 8
 	movl	$1, %ebx
 	movl	$MSR_GS_BASE, %ecx
 	rdmsr
 	testl	%edx, %edx
-	js	1f
+	js	1f				/* negative -> in kernel */
 	SWAPGS
 	xorl	%ebx, %ebx
-1:	ret
-END(paranoid_entry)
+
+1:
+	/*
+	 * Always stash CR3 in %r14.  This value will be restored,
+	 * verbatim, at exit.  Needed if paranoid_entry interrupted
+	 * another entry that already switched to the user CR3 value
+	 * but has not yet returned to userspace.
+	 *
+	 * This is also why CS (stashed in the "iret frame" by the
+	 * hardware at entry) can not be used: this may be a return
+	 * to kernel code, but with a user CR3 value.
+	 */
+	SAVE_AND_SWITCH_TO_KERNEL_CR3 scratch_reg=%rax save_reg=%r14
+
+	/*
+	 * The above SAVE_AND_SWITCH_TO_KERNEL_CR3 macro doesn't do an
+	 * unconditional CR3 write, even in the PTI case.  So do an lfence
+	 * to prevent GS speculation, regardless of whether PTI is enabled.
+	 */
+	FENCE_SWAPGS_KERNEL_ENTRY
+
+	ret
+SYM_CODE_END(paranoid_entry)
 ```
 
-As you may see, this function represents the same that we covered before. We use second (slow) method to get information about previous state of an interrupted task. As we checked this and executed `SWAPGS` in a case if we came from userspace, we should to do the same that we did before: We need to put pointer to a structure which holds general purpose registers to the `%rdi` (which will be first parameter of a secondary handler) and put error code if an exception provides it to the `%rsi` (which will be second parameter of a secondary handler):
-
-```assembly
-movq	%rsp, %rdi
-
-.if \has_error_code
-	movq	ORIG_RAX(%rsp), %rsi
-	movq	$-1, ORIG_RAX(%rsp)
-.else
-	xorl	%esi, %esi
-.endif
-```
-
-The last step before a secondary handler of an exception will be called is cleanup of new `IST` stack fram:
-
-```assembly
-.if \shift_ist != -1
-	subq	$EXCEPTION_STKSZ, CPU_TSS_IST(\shift_ist)
-.endif
-```
-
-You may remember that we passed the `shift_ist` as argument of the `idtentry` macro. Here we check its value and if its not equal to `-1`, we get pointer to a stack from `Interrupt Stack Table` by `shift_ist` index and setup it.
-
-In the end of this second way we just call secondary exception handler as we did it before:
-
-```assembly
-call	\do_sym
-```
-
-The last method is similar to previous both, but an exception occured with `paranoid=0` and we may use fast method determination of where we are from.
+As you may see, this function represents the same that we covered before. We use second (slow) method to get information about previous state of an interrupted task. We checked this and executed `SWAPGS` in a case if we came from userspace.
 
 Exit from an exception handler
 --------------------------------------------------------------------------------
 
-After secondary handler will finish its works, we will return to the `idtentry` macro and the next step will be jump to the `error_exit`:
+After secondary handler will finish its works, we will return to the `idtentry_part` macro and the next step will be jump to the `error_exit` or `paranoid_exit` based on `paranoid` value:
 
 ```assembly
+.if \paranoid
+/* this procedure expect "no swapgs" flag in ebx */
+jmp	paranoid_exit
+.else
 jmp	error_exit
+.endif
 ```
 
-routine. The `error_exit` function defined in the same [arch/x86/entry/entry_64.S](https://github.com/torvalds/linux/blob/16f73eb02d7e1765ccab3d2018e0bd98eb93d973/arch/x86/entry/entry_64.S) assembly source code file and the main goal of this function is to know where we are from (from userspace or kernelspace) and execute `SWPAGS` depends on this. Restore registers to previous state and execute `iret` instruction to transfer control to an interrupted task.
+**ICE: STOP HERE**
+
+The `error_exit` function defined in the same [arch/x86/entry/entry_64.S](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/entry) assembly source code file and the main goal of this function is to know where we are from (from userspace or kernelspace) and execute `SWPAGS` depends on this. Restore registers to previous state and execute `iret` instruction to transfer control to an interrupted task.
 
 That's all.
 
