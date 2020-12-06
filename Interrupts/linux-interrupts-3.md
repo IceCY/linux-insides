@@ -388,7 +388,7 @@ As we came from userspace, this means that exception handler will run in real pr
 movq	%rax, %rsp
 ```
 
-The last two steps before an exception handler will call secondary handler are:
+The last steps before an exception handler will call secondary handler are:
 
 1. Passing pointer to `pt_regs` structure which contains preserved general purpose registers to the `%rdi` register:
 
@@ -410,6 +410,25 @@ as it will be passed as first parameter of secondary exception handler.
 ```
 
 Additionally you may see that we zeroed the `%esi` register above in a case if an exception does not provide error code. 
+
+3. If `read_cr2` is specified as non-zero, the value in `CR2` register would be moved into `%rdx` register to serve as the 3rd argument. The `CR2` register contains the linear (virtual) address that triggered the page fault.
+
+```assembly
+.if \read_cr2
+/*
+ * Store CR2 early so subsequent faults cannot clobber it. Use R12 as
+ * intermediate storage as RDX can be clobbered in enter_from_user_mode().
+ * GET_CR2_INTO can clobber RAX.
+ */
+GET_CR2_INTO(%r12);
+.endif
+...
+.if \read_cr2
+movq	%r12, %rdx			/* Move CR2 into 3rd argument */
+.endif
+```
+
+
 
 In the end we just call secondary exception handler:
 
@@ -489,7 +508,7 @@ jmp	error_exit
 
 **ICE: STOP HERE**
 
-The `error_exit` function defined in the same [arch/x86/entry/entry_64.S](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/entry) assembly source code file and the main goal of this function is to know where we are from (from userspace or kernelspace) and execute `SWPAGS` depends on this. Restore registers to previous state and execute `iret` instruction to transfer control to an interrupted task.
+The `error_exit` function defined in the same [arch/x86/entry/entry_64.S](https://elixir.bootlin.com/linux/v5.5/source/arch/x86/entry_64.S) assembly source code file and the main goal of this function is to know where we are from (from userspace or kernelspace) and execute `SWPAGS` depends on this. Restore registers to previous state and execute `iret` instruction to transfer control to an interrupted task.
 
 That's all.
 
